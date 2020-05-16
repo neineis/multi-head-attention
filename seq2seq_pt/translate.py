@@ -29,10 +29,10 @@ parser.add_argument('-src', required=True,
 parser.add_argument('-feats', default=[], nargs='+', type=str)
 parser.add_argument('-tgt',
                     help='True target sequence (optional)')
-parser.add_argument('-output', default='/search/odin/zll/NQG/data/models/NQG_plus/result_0429_125215/pred.txt',
+parser.add_argument('-output', default='/search/odin/zll/NQG/data/models/NQG_plus/testresult/pred.txt',
                     help="""Path to output the predictions (each line will
                     be the decoded sequence""")
-parser.add_argument('-beam_size', type=int, default=8,
+parser.add_argument('-beam_size', type=int, default=12,
                     help='Beam size')
 parser.add_argument('-batch_size', type=int, default=1,
                     help='Batch size')
@@ -204,4 +204,4 @@ def main():
 
 
 if __name__ == "__main__":
-    showAtt()
+    main()

@@ -38,7 +38,7 @@ def add_data_options(parser):
     parser.add_argument('-dev_feats', default=[], nargs='+', type=str)
     parser.add_argument('-dev_ref',
                         help='Path to the dev reference file.')
-    parser.add_argument('-beam_size', type=int, default=12,
+    parser.add_argument('-beam_size', type=int, default=8,
                         help='Beam size')
     parser.add_argument('-max_sent_length', type=int, default=100,
                         help='Maximum sentence length.')
@@ -131,10 +131,8 @@ def add_train_options(parser):
                         help="""If a valid path is specified, then this will load
                         pretrained word embeddings on the encoder side.
                         See README for specific formatting instructions.""")
-    parser.add_argument('-pre_word_vecs_dec',
-                        help="""If a valid path is specified, then this will load
-                        pretrained word embeddings on the decoder side.
-                        See README for specific formatting instructions.""")
+    parser.add_argument('-rand_unif_init_mag',type=float, default=0.02)
+    parser.add_argument('-trunc_norm_init_std', type=float, default=1e-4)
 
     # GPU
     parser.add_argument('-gpus', default=[], nargs='+', type=int,

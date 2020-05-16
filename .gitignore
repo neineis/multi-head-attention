@@ -1,0 +1,8 @@
+.idea/*
+seq2seq_pt/PyBLEU/*
+*DS_Store
+
+pred.txt
+multi-bleu.perl
+*.pt
+*.pyc

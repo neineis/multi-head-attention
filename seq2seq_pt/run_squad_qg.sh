@@ -11,7 +11,7 @@ mkdir -p ${SAVEPATH}
 
 cd ${EXEHOME}
 
-CUDA_VISIBLE_DEVICES=1 python3 train.py \
+CUDA_VISIBLE_DEVICES=3 python3 train.py \
        -save_path ${SAVEPATH} -log_home ${SAVEPATH} \
        -online_process_data \
        -train_src ${DATAHOME}/train/train.txt.source.txt -src_vocab ${DATAHOME}/train/vocab.txt.20k \
@@ -24,7 +24,7 @@ CUDA_VISIBLE_DEVICES=1 python3 train.py \
        -word_vec_size 300 \
        -dropout 0.5 \
        -batch_size 64 \
-       -beam_size 7 \
+       -beam_size 8 \
        -epochs 40 -optim adam -learning_rate 0.001 \
        -gpus 0 \
        -curriculum 0 -extra_shuffle \

@@ -9,13 +9,14 @@ class ScaledDotProductAttention(nn.Module):  # 点乘
         self.d_dim = d_dim
         self.weight_linear = nn.Linear(self.d_dim,1)
         self.sm = nn.Softmax(dim=1)
+        self.mask = None
 
     def computeAttWeight(self,Q):
         weights = self.weight_linear(Q)
         weights = self.sm(weights)
         return weights
 
-    def forward(self, Q, K, V, scale =None,attn_mask=None):  # 实现注意力公式
+    def forward(self, Q, K, V, scale, mask):  # 实现注意力公式
         """前向传播.
 
         Args:
@@ -34,11 +35,12 @@ class ScaledDotProductAttention(nn.Module):  # 点乘
         scores = torch.matmul(Q, K.transpose(-1, -2))
         # weights = self.computeAttWeight(Q)
         # weights = weights.expand(scores.shape)
-
+        # self.mask: batch_size, seq_len
         if scale:
             scores = torch.matmul(Q, K.transpose(-1, -2)) * scale
-        if attn_mask:
-            scores.masked_fill_(attn_mask, -np.inf)
+        if mask is not None:
+            scores = scores * (1 - mask) + mask * (-1000000)
+
         attn = nn.Softmax(dim=-1)(scores)
         # weight_attn = torch.mul(attn, weights)
 
@@ -65,6 +67,12 @@ class MultiHeadAttention(nn.Module):  # 多头注意力
         self.dropout = nn.Dropout(self.dropout)
         # multi-head attention之后需要做layer norm
         self.layer_norm = nn.LayerNorm(d_model)
+        self.mask = None
+
+    def applyMask(self, mask):
+        self.mask = mask
+        self.mask = self.mask.unsqueeze(1).unsqueeze(1).repeat(1, self.n_heads, 1, 1)
+
 
 
     def forward(self, Q, K, V, attn_mask=None):
@@ -72,10 +80,9 @@ class MultiHeadAttention(nn.Module):  # 多头注意力
         q_s = self.W_Q(Q).view(batch_size, -1, self.n_heads, self.dim_per_head).transpose(1, 2)
         k_s = self.W_K(K).view(batch_size, -1, self.n_heads, self.dim_per_head).transpose(1, 2)
         v_s = self.W_V(V).view(batch_size, -1, self.n_heads, self.dim_per_head).transpose(1, 2)
-        if attn_mask:
-            attn_mask = attn_mask.unsqueeze(1).repeat(1, self.n_heads, 1, 1)
+
         scale = q_s.size(-1)** -0.5
-        context, attn= self.dot_product_attention(q_s, k_s, v_s, scale,attn_mask)
+        context, attn= self.dot_product_attention(q_s, k_s, v_s, scale,self.mask)
         context = context.sum(2)
         head_weights =  self.linear_weight(context)
         head_weights =  nn.Softmax(dim=1)(head_weights)

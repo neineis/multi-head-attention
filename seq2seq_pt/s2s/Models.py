@@ -12,6 +12,30 @@ except ImportError:
     pass
 
 
+
+def init_gru_wt(lstm, opt):
+    for name, _ in gru.named_parameters():
+        if 'weight' in name:
+            wt = getattr(lstm, name)
+            wt.data.uniform_(-opt.rand_unif_init_mag, opt.rand_unif_init_mag)
+        elif 'bias' in name:
+            # set forget bias to 1
+            bias = getattr(lstm, name)
+            n = bias.size(0)
+            start, end = n // 4, n // 2
+            bias.data.fill_(0.)
+            bias.data[start:end].fill_(1.)
+
+def init_linear_wt(linear,opt):
+    linear.weight.data.normal_(std=opt.trunc_norm_init_std)
+    if linear.bias is not None:
+        linear.bias.data.normal_(std=opt.trunc_norm_init_std)
+
+def init_wt_normal(wt,opt):
+    wt.data.normal_(std=opt.trunc_norm_init_std)
+
+
+
 class Encoder(nn.Module):
     def __init__(self, opt, dicts, weight):
         self.layers = opt.layers
@@ -124,7 +148,7 @@ class Decoder(nn.Module):
         mul_head_attns = []
         copyGateOutputs = []
         cur_context = init_att
-        self.attn.applyMask(src_pad_mask)
+        self.attention.applyMask(src_pad_mask)
 
         for emb_t in emb.split(1):
             emb_t = emb_t.squeeze(0)
