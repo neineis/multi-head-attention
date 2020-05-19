@@ -95,6 +95,7 @@ def diff_attn(multi_attns):
     mul_diff = (mul_diff.sum(-1).sum(-1).sum(-1).sum())/(n_heads*n_heads)
     return  mul_diff
 
+
 def kl_categorical(tmps):
 
     kls = 0

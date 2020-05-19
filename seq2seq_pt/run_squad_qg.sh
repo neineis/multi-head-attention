@@ -18,13 +18,12 @@ CUDA_VISIBLE_DEVICES=3 python3 train.py \
        -train_feats ${DATAHOME}/train/train.txt.pos ${DATAHOME}/train/train.txt.ner ${DATAHOME}/train/train.txt.case \
        -feat_vocab ${DATAHOME}/train/feat.vocab.txt \
        -train_tgt ${DATAHOME}/train/train.txt.target.txt -tgt_vocab ${DATAHOME}/train/vocab.txt.20k \
-       -glove_path ${DATAHOME}/GloVe_300d_w2v_format.txt\
        -layers 1 \
        -enc_rnn_size 512 -brnn \
        -word_vec_size 300 \
        -dropout 0.5 \
        -batch_size 64 \
-       -beam_size 8 \
+       -beam_size 5 \
        -epochs 40 -optim adam -learning_rate 0.001 \
        -gpus 0 \
        -curriculum 0 -extra_shuffle \

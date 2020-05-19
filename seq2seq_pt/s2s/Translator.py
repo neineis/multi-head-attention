@@ -123,7 +123,7 @@ class Translator(object):
 
             # print('input shape:',input.shape)  [1，beam_size]
             g_outputs, c_outputs, copyGateOutputs, decStates, attn, att_vec, mul_head_attn = \
-                self.model.decoder(input, decStates, context, padMask.view(-1, padMask.size(2)), att_vec)
+                self.model.decoder(input, decStates, context, padMask.view(-1, padMask.size(2)), att_vec, None, False)
 
             # g_outputs: 1 x (beam*batch) x numWords
             copyGateOutputs = copyGateOutputs.view(-1, 1)

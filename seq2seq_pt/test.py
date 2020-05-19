@@ -26,14 +26,8 @@ print(kl_categorical(tmps))
 _
 # print(_kl2)
 '''
-
-p= torch.tensor([0.5,0.1,0.4,0])
-
-# p = F.softmax(p, dim=-1)
-q= torch.tensor([0.4,0.4,0.2])
-
-flag = p.data.eq(0).float()
-print(1-flag)
+sss = 'I LOVE chINE'
+print(sss.lower())
 # a = torch.randn(16,8,30)
 #
 # b =torch.split(a,1,1)
