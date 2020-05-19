@@ -122,8 +122,8 @@ class Translator(object):
                                  if not b.done]).transpose(0, 1).contiguous().view(1, -1)
 
             # print('input shape:',input.shape)  [1，beam_size]
-            g_outputs, c_outputs, copyGateOutputs, decStates, attn, att_vec, mul_head_attn = \
-                self.model.decoder(input, decStates, context, padMask.view(-1, padMask.size(2)), att_vec, None, False)
+            g_outputs, c_outputs, copyGateOutputs, decStates, attn, att_vec, mul_head_attn, _,_= \
+                self.model.decoder(input, decStates, context, padMask.view(-1, padMask.size(2)), att_vec)
 
             # g_outputs: 1 x (beam*batch) x numWords
             copyGateOutputs = copyGateOutputs.view(-1, 1)

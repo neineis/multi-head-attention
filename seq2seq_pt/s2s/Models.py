@@ -3,9 +3,9 @@ import torch.nn as nn
 from torch.autograd import Variable
 from torch.nn import functional as F
 import s2s.modules
-import s2s
 from torch.nn.utils.rnn import pad_packed_sequence as unpack
 from torch.nn.utils.rnn import pack_padded_sequence as pack
+import random
 
 try:
     import ipdb
@@ -113,7 +113,6 @@ class Decoder(nn.Module):
         self.layers = opt.layers
         self.input_feed = opt.input_feed
         input_size = opt.word_vec_size
-        self.vocab_size = 20000
         if self.input_feed:
             input_size += opt.enc_rnn_size
 
@@ -128,11 +127,16 @@ class Decoder(nn.Module):
         self.rnn = StackedGRU(opt.layers, input_size, opt.dec_rnn_size, opt.dropout)
         self.attn = s2s.modules.ConcatAttention(opt.enc_rnn_size, opt.dec_rnn_size, opt.att_vec_size)
         self.attention = s2s.modules.MultiHeadAttention(opt.dec_rnn_size, opt.num_heads)
+        self.dim_per_head = opt.dec_rnn_size * 6 // opt.num_heads
+        self.n_heads = opt.num_heads
+        self.W_V = nn.Linear(opt.dec_rnn_size, self.dim_per_head * self.n_heads)
+        self.W_K = nn.Linear(opt.dec_rnn_size, self.dim_per_head * self.n_heads)
+
         self.dropout = nn.Dropout(opt.dropout)
+        self.trans = nn.Linear((opt.enc_rnn_size + opt.dec_rnn_size), opt.dec_rnn_size)
         self.readout = nn.Linear((opt.enc_rnn_size + opt.dec_rnn_size + opt.word_vec_size), opt.dec_rnn_size)
         self.maxout = s2s.modules.MaxOut(opt.maxout_pool_size)
         self.maxout_pool_size = opt.maxout_pool_size
-
 
         self.copySwitch = nn.Linear(opt.enc_rnn_size + opt.dec_rnn_size, 1)
 
@@ -143,7 +147,7 @@ class Decoder(nn.Module):
             pretrained = torch.load(opt.pre_word_vecs_dec)
             self.word_lut.weight.data.copy_(pretrained)
 
-    def forward(self, input, hidden, context, src_pad_mask, init_att,generator,isTrain=True):
+    def forward(self, input, hidden, context, src_pad_mask, init_att):
         emb = self.word_lut(input)
 
         g_outputs = []
@@ -152,50 +156,40 @@ class Decoder(nn.Module):
         copyGateOutputs = []
         cur_context = init_att
         self.attention.applyMask(src_pad_mask)
-        out_emb = None
+        batch_size = init_att.size(0)
+        k_s = self.W_K(context.transpose(0, 1)).view(batch_size, -1, self.n_heads, self.dim_per_head).transpose(1, 2)
+        v_s = self.W_V(context.transpose(0, 1)).view(batch_size, -1, self.n_heads, self.dim_per_head).transpose(1, 2)
+
+
+        mul_cs, mul_as = [],[]
+
+        select_head = torch.randint(0, self.n_heads - 1, size=(batch_size,1,1))
+
         for emb_t in emb.split(1):
             emb_t = emb_t.squeeze(0)
-            if isTrain and (not (out_emb ==None)):
-                use_gound_truth = (torch.rand(emb_t.size(0),1) > 0.25).long()  # Probabilities indicating whether to use ground truth labels instead of previous decoded tokens
-                if torch.cuda.is_available():
-                    use_gound_truth = use_gound_truth.cuda()
-
-                emb_t = use_gound_truth * emb_t + (1 - use_gound_truth) * out_emb  # Select decoder input based on use_ground_truth probabilities
-
             input_emb = emb_t
             if self.input_feed:
                 input_emb = torch.cat([emb_t, cur_context], 1)
             output, hidden = self.rnn(input_emb, hidden)
-            # cur_context, attn, precompute = self.attn(output, context.transpose(0, 1), precompute)
-            cur_context, context_attention, mul_head_attn = self.attention( output.unsqueeze(1),context.transpose(0, 1), context.transpose(0, 1))
+            cur_context, context_attention, all_head_attn, mul_c, mul_a = self.attention(output.unsqueeze(1),k_s, v_s,select_head)
             copyProb = self.copySwitch(torch.cat((output, cur_context), dim=1))
             copyProb = F.sigmoid(copyProb)
 
             readout = self.readout(torch.cat((emb_t, output, cur_context), dim=1))
             maxout = self.maxout(readout)
             output = self.dropout(maxout)
-
             g_outputs += [output]
             c_outputs += [context_attention]
-            mul_head_attns += [mul_head_attn]
+            mul_head_attns += [all_head_attn]
             copyGateOutputs += [copyProb]
-
-            if isTrain:
-                g_out_prob = generator.forward(output) + 1e-8
-                g_predict = torch.log(g_out_prob * ((1 - copyProb).expand_as(g_out_prob)))
-                c_out = context_attention + 1e-8
-                c_predict = torch.log(c_out * (copyProb.expand_as(c_out)))
-                allScores = torch.cat((g_out_prob, c_predict), dim=1)
-                x_t = torch.multinomial(allScores, 1)
-                is_oov = x_t >= self.vocab_size # Mask indicating whether sampled word is OOV
-                is_oov = is_oov + 0
-                x_t = (1 - is_oov) * x_t.detach() + (is_oov) * s2s.Constants.UNK
-                out_emb = self.word_lut(x_t)
-
+            mul_cs += [mul_c]
+            mul_as += [mul_a]
         g_outputs = torch.stack(g_outputs)
         c_outputs = torch.stack(c_outputs)
         copyGateOutputs = torch.stack(copyGateOutputs)
-        return g_outputs, c_outputs, copyGateOutputs, hidden, context_attention, cur_context, mul_head_attns
+        mul_cs = torch.stack(mul_cs)
+        mul_as = torch.stack(mul_as)
+        return g_outputs, c_outputs, copyGateOutputs, hidden, context_attention, cur_context, mul_head_attns, mul_cs, mul_as
 
 
 class DecInit(nn.Module):
@@ -239,7 +233,7 @@ class NMTModel(nn.Module):
         init_att = self.make_init_att(context)
         enc_hidden = self.decIniter(enc_hidden[1]).unsqueeze(0)  # [1] is the last backward hiden
 
-        g_out, c_out, c_gate_out, dec_hidden, _attn, _attention_vector, mul_head_attns  = self.decoder(tgt, enc_hidden, context,
-                                                                                      src_pad_mask, init_att, self.generator,True)
+        g_out, c_out, c_gate_out, dec_hidden, _attn, _attention_vector, mul_head_attns,mul_cs,mul_as  = self.decoder(tgt, enc_hidden, context,
+                                                                                      src_pad_mask, init_att)
 
-        return g_out, c_out, c_gate_out, mul_head_attns
+        return g_out, c_out, c_gate_out, mul_head_attns,mul_cs, mul_as

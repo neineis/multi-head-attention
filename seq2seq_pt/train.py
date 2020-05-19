@@ -79,21 +79,70 @@ def loss_function(g_outputs, g_targets, generator, crit, eval=False):
     report_loss = total_loss.item()
     return total_loss, report_loss, 0
 
-def diff_attn(multi_attns):
-    n_heads = len(multi_attns[0])
-    multi_attns = [torch.stack(x) for x in multi_attns]
-    multi_attns = torch.stack(multi_attns) # len_q * n_heads * batch_size * len_v
-    multi_attns = multi_attns.permute(2,1,0,3)
+def diff_outputs(inputs):
+    """ Calculate the differences of all heads outputs
+    :param inputs: A tensor with shape [q_length, batch, heads,channels]
+    :param name: An optional string
+    :returns: A tensor with shape [batch, q_length]
+    """
 
-    x1 = multi_attns.unsqueeze(1)
-    x2 = multi_attns.unsqueeze(2)
+    x = inputs.transpose(0,1)  #shape [batch, q_length, heads, channels]
+    x = F.normalize(x, dim=-1,p=2) #normalize the last dimension
+    x1 = x.unsqueeze(2)  #shape [batch, q_length, 1, heads, channels]
+    x2 = x.unsqueeze(3)   #shape [batch, q_length, heads, 1, channels]
+    cos_diff = torch.mul(x1, x2).sum(dim=-1) #shape [batch, q_length, heads, heads], broadcasting
 
-    x1 =x1.repeat(1,n_heads,1,1,1)
-    x2= x2.repeat(1,1,n_heads,1,1)
-    mul_diff = torch.mul(x1,x2)
-    mul_diff = mul_diff.permute(0, 3, 1, 2, 4)
-    mul_diff = (mul_diff.sum(-1).sum(-1).sum(-1).sum())/(n_heads*n_heads)
-    return  mul_diff
+    cos_diff = cos_diff.sum(dim=-1).sum(dim=-1) + 1.0  #shape [batch, q_length]
+
+    return cos_diff
+
+
+def diff_subspaces(inputs):
+    """ Calculate the differences of all heads subspaces
+    :param inputs: A tensor with shape [batch, heads, length_kv, depth_v]
+    :param name: An optional string
+    :returns: A tensor with shape [batch, length_kv]
+    """
+    x = inputs.permute(0, 2, 1, 3)  # shape [batch, q_length, heads, channels]
+    x = F.normalize(x, dim=-1, p=2)  # normalize the last dimension
+    x1 = x.unsqueeze(2)  # shape [batch, q_length, 1, heads, channels]
+    x2 = x.unsqueeze(3)  # shape [batch, q_length, heads, 1, channels]
+    cos_diff = torch.mul(x1, x2).sum(dim=-1)  # shape [batch, q_length, heads, heads], broadcasting
+
+    cos_diff = cos_diff.sum(dim=-1).sum(dim=-1) + 1.0  # shape [batch, q_length]
+
+    return cos_diff
+
+
+def diff_positions(inputs):
+    """ Calculate the differences of all heads alignment matrices (attention weights)
+    :param inputs: A tensor with shape [batch, heads, length_q, length_kv]
+    :param name: An optional string
+    :returns: A tensor with shape [batch], alignment from sentence to sentence
+    """
+
+    x = inputs.permute(1,2,0,3)
+    heads = x.size(1)
+    x1 = x.unsqueeze(1)  #shape [batch, 1, heads, length_q, length_kv]
+    x2 = x.unsqueeze(2)  #shape [batch, heads, 1, length_q, length_kv]
+
+    sos_diff = torch.sub(x1, x2) #shape [batch, heads, heads, length_q, length_kv], broadcasting
+    sos_diff = sos_diff.permute(0, 3, 1, 2, 4) #shape [batch, length_q, heads, heads, length_kv]
+    sos_diff = torch.square(sos_diff).sum(-1).sum(-1).sum(-1) / (heads*heads) #shape [batch, length_q]
+    # sos_diff_log = tf.negative(tf.log(sos_diff))
+    # sos_diff = tf.negative(sos_diff) + 1.0  # Query side needs mask, which is at outside
+
+    mul_diff = torch.mul(x1, x2) #shape [batch, heads, heads, length_q, length_kv]
+    mul_diff = mul_diff.permute(0, 3, 1, 2, 4) #shape [batch, length_q, heads, heads, length_kv]
+    mul_diff = mul_diff.sum(-1).sum(-1).sum(-1) / (heads*heads) #shape [batch, length_q]
+    # mul_diff_log = tf.negative(tf.log(mul_diff))
+    #mul_diff = tf.negative(mul_diff) + 1.0  # Query side needs mask, which is at outside
+
+    cos_diff = torch.mul(F.normalize(x1, dim=-1,p=2), F.normalize(x2, dim=-1,p=2))
+    cos_diff = cos_diff.permute(0, 3, 1, 2, 4) #shape [batch, length_q, heads, heads, length_kv]
+    cos_diff = cos_diff.sum(-1).sum(-1).sum(-1) / (heads*heads) #shape [batch, length_q], no need to plus one
+
+    return mul_diff
 
 
 def kl_categorical(tmps):
@@ -108,7 +157,7 @@ def kl_categorical(tmps):
 
 def generate_copy_loss_function(g_outputs, c_outputs, g_targets,
                                 c_switch, c_targets, c_gate_values,
-                                generator, crit, copyCrit,mul_head_attns):
+                                generator, crit, copyCrit,mul_cs, mul_as):
     batch_size = g_outputs.size(1)
 
     g_out_t = g_outputs.view(-1, g_outputs.size(2))
@@ -128,14 +177,16 @@ def generate_copy_loss_function(g_outputs, c_outputs, g_targets,
 
     g_loss = crit(g_output_prob_log, g_targets.view(-1))
     c_loss = copyCrit(c_output_prob_log, c_targets.view(-1))
-    kl_loss = 0
+    cs_loss = diff_outputs(mul_cs).sum()
+    as_loss = diff_positions(mul_as).sum()
     # kl_loss = diff_attn(mul_head_attns)
     # total_loss = g_loss + c_loss + kl_loss * 100
-    total_loss = g_loss + c_loss
+    total_loss = g_loss + c_loss + cs_loss + 10 * as_loss
+
     # print(torch.isnan(total_loss),torch.isnan(kl_loss),total_loss.item(),kl_loss.item())
     report_loss = total_loss.item()
     # print(report_loss)
-    return total_loss, report_loss, kl_loss, 0
+    return total_loss, report_loss, cs_loss, as_loss, 0
 
 
 def addPair(f1, f2):
@@ -299,7 +350,7 @@ def trainModel(model, translator, trainData, validData, dataset, optim):
         # shuffle mini batch order
         batchOrder = torch.randperm(len(trainData))
 
-        total_loss, total_kl_loss, total_words, total_num_correct = 0, 0, 0,0
+        total_loss, total_cs_loss, total_ca_loss, total_words, total_num_correct = 0, 0, 0, 0, 0
         report_loss, report_tgt_words, report_src_words, report_num_correct = 0, 0, 0, 0
         start = time.time()
         for i in range(len(trainData)):
@@ -317,15 +368,15 @@ def trainModel(model, translator, trainData, validData, dataset, optim):
             model.zero_grad()
             # ipdb.set_trace()
 
-            g_outputs, c_outputs, c_gate_values, mul_head_attns = model(batch)
+            g_outputs, c_outputs, c_gate_values, mul_head_attns,mul_cs,mul_as = model(batch)
             targets = batch[2][0][1:]  # exclude <s> from targets
             copy_switch = batch[2][1][1:]
             c_targets = batch[2][2][1:]
             #print('mul_head_attns:',len(mul_head_attns),len(mul_head_attns[0]),mul_head_attns[0][0].shape)
             # loss, res_loss, num_correct = loss_function(g_outputs, targets, model.generator, criterion)
-            loss, res_loss, kl_loss, num_correct = generate_copy_loss_function(
+            loss, res_loss, cs_loss, ca_loss, num_correct = generate_copy_loss_function(
                 g_outputs, c_outputs, targets, copy_switch, c_targets, c_gate_values, model.generator, criterion,
-                copyLossF, mul_head_attns)
+                copyLossF, mul_cs,mul_as)
 
             if math.isnan(res_loss) or res_loss > 1e20:
                 if math.isnan(res_loss):
@@ -343,16 +394,18 @@ def trainModel(model, translator, trainData, validData, dataset, optim):
             report_tgt_words += num_words
             report_src_words += batch[0][-1].data.sum()
             total_loss += res_loss
-            total_kl_loss += kl_loss
+            total_cs_loss += cs_loss
+            total_ca_loss += ca_loss
             total_num_correct += num_correct
             total_words += num_words
             if i % opt.log_interval == -1 % opt.log_interval:
                 logger.info(
-                    "Epoch %2d, %6d/%5d/%5d; acc: %6.2f; loss: %6.2f; kl_loss:%6.2f; words: %5d; ppl: %6.2f; %3.0f src tok/s; %3.0f tgt tok/s; %6.0f s elapsed" %
+                    "Epoch %2d, %6d/%5d/%5d; acc: %6.2f; loss: %6.2f; cs_loss:%6.2f; ca_loss:%6.2f; words: %5d; ppl: %6.2f; %3.0f src tok/s; %3.0f tgt tok/s; %6.0f s elapsed" %
                     (epoch, totalBatchCount, i + 1, len(trainData),
                      report_num_correct / report_tgt_words * 100,
                      report_loss,
-                     kl_loss,
+                     cs_loss,
+                     ca_loss,
                      report_tgt_words,
                      math.exp(min((report_loss / report_tgt_words), 16)),
                      report_src_words / max((time.time() - start), 1.0),
@@ -374,6 +427,7 @@ def trainModel(model, translator, trainData, validData, dataset, optim):
                 if valid_bleu >= optim.best_metric:
                     saveModel(valid_bleu)
                 optim.updateLearningRate(valid_bleu, epoch)
+
 
         return total_loss / total_words, total_num_correct / total_words
         # return 0, 0

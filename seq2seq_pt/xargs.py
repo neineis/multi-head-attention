@@ -38,7 +38,7 @@ def add_data_options(parser):
     parser.add_argument('-dev_feats', default=[], nargs='+', type=str)
     parser.add_argument('-dev_ref',
                         help='Path to the dev reference file.')
-    parser.add_argument('-beam_size', type=int, default=8,
+    parser.add_argument('-beam_size', type=int, default=5,
                         help='Beam size')
     parser.add_argument('-max_sent_length', type=int, default=100,
                         help='Maximum sentence length.')
@@ -58,7 +58,7 @@ def add_model_options(parser):
                         help='Concat attention vector sizes')
     parser.add_argument('-maxout_pool_size', type=int, default=2,
                         help='Pooling size for MaxOut layer.')
-    parser.add_argument('-num_heads', type=int, default=8,
+    parser.add_argument('-num_heads', type=int, default=6,
                         help='the num of multi heads.')
     parser.add_argument('-input_feed', type=int, default=1,
                         help="""Feed the context vector at each time step as
