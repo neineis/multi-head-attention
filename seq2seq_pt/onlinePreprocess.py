@@ -71,7 +71,10 @@ def makeData(srcFile, featFiles, tgtFile, srcDicts,  featDicts, tgtDicts):
     tgtF = open(tgtFile, encoding='utf-8')
     featFs = [open(x, encoding='utf-8') for x in featFiles]
 
+    index = 0
     while True:
+        index += 1
+        if index % 10000 == 0: print("preprocess:"+str(index))
         sline = srcF.readline()
         tline = tgtF.readline()
         featLines = [x.readline() for x in featFs]
@@ -137,41 +140,65 @@ def makeData(srcFile, featFiles, tgtFile, srcDicts,  featDicts, tgtDicts):
     new_tgt = {}
     new_ori_src = []
     new_ori_tgt = []
-    tgts = {}
-    switchs = {}
-    c_tgts = {}
-    ori_tgts = {}
+    #tgts = {}
+    tgts = []
+    #switchs = {}
+    switchs = []
+    #c_tgts = {}
+    c_tgts = []
+    #ori_tgts = {}
+    ori_tgts = []
     new_feats = []
     new_switch =[]
     new_c_tgt = []
     new_sizes = []
-    for i in range(count):
 
-        if [src[i]] not in new_src:
+    store_map = {}
+    #print("srclen:"+str(len(src))+":"+str(src[0])+":"+str(src[1]))
+    for i in range(count):
+        #print(str(src[i]))
+        #print(str(new_src))
+        if i % 1000 == 0: print("processing:"+str(i))
+        ismatch = False
+        index_new = -1
+        for index_new, new_src_item in enumerate(new_src):
+            if src[i].equal(new_src_item):
+               ismatch = True
+               break
+        if not ismatch:
+        #if src[i] not in new_src:
             new_src.append(src[i])
             new_ori_src.append(ori_src[i])
-            tgts[src[i]] = [tgt[i]]
-            ori_tgts[src[i]] = [ori_tgt[i]]
-            new_feats.append(feats[i])
-            switchs[src[i]] = [switch[i]]
-            c_tgts[src[i]] = [c_tgt[i]]
+            #tgts[src[i]] = [tgt[i]]
+            tgts.append([tgt[i]])
+            #ori_tgts[src[i]] = [ori_tgt[i]]
+            ori_tgts.append([ori_tgt[i]])
+            #switchs[src[i]] = [switch[i]]
+            switchs.append([switch[i]])
+            #c_tgts[src[i]] = [c_tgt[i]]
+            c_tgts.append([c_tgt[i]])
             new_sizes.append(sizes[i])
+            new_feats.append(feats[i])
         else:
-            print('dd:', len(new_src), [src[i]] in new_src)
-            tgts[src[i]].append(tgt[i])
-            switchs[src[i]].append(switch[i])
-            c_tgts[src[i]].append(c_tgt[i])
-            ori_tgts[src[i]].append(ori_tgt[i])
+            #print('dd:', len(new_src), [src[i]] in new_src)
+            tgts[index_new].append(tgt[i])
+            switchs[index_new].append(switch[i])
+            c_tgts[index_new].append(c_tgt[i])
+            ori_tgts[index_new].append(ori_tgt[i])
     if shuffle == 1:
         logger.info('... shuffling sentences')
         perm = torch.randperm(len(src))
         new_src = [new_src[idx] for idx in perm]
         new_ori_src = [new_ori_src[idx] for idx in perm]
-        for src in new_src:
-            new_tgt.append(tgts[src])
-            new_ori_tgt.append(ori_tgts[src])
-            new_switch.append(switchs[src])
-            new_c_tgt.append(c_tgts[src])
+        new_tgt = [tgts[idx] for idx in perm]
+        new_ori_tgt = [ori_tgts[idx] for idx in perm]
+        new_switch = [switchs[idx] for idx in perm]
+        new_c_tgt = [c_tgts[idx] for idx in perm]
+        #for src in new_src:
+        #    new_tgt.append(tgts[src])
+        #    new_ori_tgt.append(ori_tgts[src])
+        #    new_switch.append(switchs[src])
+        #    new_c_tgt.append(c_tgts[src])
         new_feats = [new_feats[idx] for idx in perm]
         new_sizes = [new_sizes[idx] for idx in perm]
 
@@ -179,11 +206,15 @@ def makeData(srcFile, featFiles, tgtFile, srcDicts,  featDicts, tgtDicts):
     _, perm = torch.sort(torch.Tensor(new_sizes))
     new_src = [new_src[idx] for idx in perm]
     new_ori_src = [new_ori_src[idx] for idx in perm]
-    for src in new_src:
-        new_tgt.append(tgts[src])
-        new_ori_tgt.append(ori_tgts[src])
-        new_switch.append(switchs[src])
-        new_c_tgt.append(c_tgts[src])
+    new_tgt = [tgts[idx] for idx in perm]
+    new_ori_tgt = [ori_tgts[idx] for idx in perm]
+    new_switch = [switchs[idx] for idx in perm]
+    new_c_tgt = [c_tgts[idx] for idx in perm]
+    #for src in new_src:
+    #    new_tgt.append(tgts[src])
+    #    new_ori_tgt.append(ori_tgts[src])
+    #    new_switch.append(switchs[src])
+    #    new_c_tgt.append(c_tgts[src])
     new_feats = [new_feats[idx] for idx in perm]
 
     logger.info('Prepared %d sentences (%d ignored due to length == 0 or > %d)' %
