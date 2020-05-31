@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import math
 import numpy as np
-
+import torch.nn.functional as F
 
 class ConcatAttention(nn.Module):  # 点乘
     def __init__(self,d_dim):
@@ -115,7 +115,7 @@ class MultiHeadAttention(nn.Module):  # 多头注意力
 
 
 
-    def forward(self, Q, k_s, v_s, select_head, attn_mask=None):
+    def forward(self, Q, k_s, v_s, base_flag):
         residual, batch_size = Q, Q.size(0)
         q_s = self.W_Q(Q).view(batch_size, -1, self.n_heads, self.dim_per_head).transpose(1, 2)
 
@@ -123,6 +123,12 @@ class MultiHeadAttention(nn.Module):  # 多头注意力
 
         context, attn = self.dot_product_attention(q_s, k_s, v_s, scale, self.mask)
         context = context.squeeze(2)   # batch_size, num_heads, dim_pre_head
+        weights = self.linear_weight(context).squeeze(2)
+        if not base_flag:
+            select_head = torch.multinomial(F.softmax(weights), 1).unsqueeze(1)
+        else:
+            _, cur_max_y = torch.max(F.softmax(weights), 1)
+            select_head = cur_max_y.view(-1,1).unsqueeze(1)
         select_head1 = select_head.repeat(1, 1, self.dim_per_head).cuda()
         output = torch.gather(context, dim=1, index=select_head1).squeeze(1)
         output = self.linear_final1(output)

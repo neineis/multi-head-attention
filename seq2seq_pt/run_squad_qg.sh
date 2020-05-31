@@ -11,14 +11,13 @@ mkdir -p ${SAVEPATH}
 
 cd ${EXEHOME}
 
-CUDA_VISIBLE_DEVICES=0 python3 train.py \
+CUDA_VISIBLE_DEVICES=1 python3 train.py \
        -save_path ${SAVEPATH} -log_home ${SAVEPATH} \
        -online_process_data \
        -train_src ${DATAHOME}/train/train.txt.source.txt -src_vocab ${DATAHOME}/train/vocab.txt.20k \
        -train_feats ${DATAHOME}/train/train.txt.pos ${DATAHOME}/train/train.txt.ner ${DATAHOME}/train/train.txt.case \
        -feat_vocab ${DATAHOME}/train/feat.vocab.txt \
        -train_tgt ${DATAHOME}/train/train.txt.target.txt -tgt_vocab ${DATAHOME}/train/vocab.txt.20k \
-       -glove_path ${DATAHOME}/GloVe_300d_w2v_format.txt\
        -layers 1 \
        -enc_rnn_size 512 -brnn \
        -word_vec_size 300 \

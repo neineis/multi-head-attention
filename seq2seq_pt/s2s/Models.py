@@ -5,7 +5,7 @@ from torch.nn import functional as F
 import s2s.modules
 from torch.nn.utils.rnn import pad_packed_sequence as unpack
 from torch.nn.utils.rnn import pack_padded_sequence as pack
-import random
+import time
 
 try:
     import ipdb
@@ -138,17 +138,26 @@ class Decoder(nn.Module):
         self.maxout = s2s.modules.MaxOut(opt.maxout_pool_size)
         self.maxout_pool_size = opt.maxout_pool_size
 
-        self.copySwitch = nn.Linear(opt.enc_rnn_size + opt.dec_rnn_size, 1)
+        self.tt = torch.cuda
 
+        self.copySwitch = nn.Linear(opt.enc_rnn_size + opt.dec_rnn_size, 1)
+        self.generator = nn.Sequential(
+            nn.Linear(opt.dec_rnn_size // opt.maxout_pool_size, dicts.size()),  # TODO: fix here
+            # nn.LogSoftmax(dim=1)
+            nn.Softmax(dim=1)
+        )
         self.hidden_size = opt.dec_rnn_size
+
 
     def load_pretrained_vectors(self, opt):
         if opt.pre_word_vecs_dec is not None:
             pretrained = torch.load(opt.pre_word_vecs_dec)
             self.word_lut.weight.data.copy_(pretrained)
 
-    def forward(self, input, hidden, context, src_pad_mask, init_att):
-        emb = self.word_lut(input)
+    def forward(self, input, hidden, context, src_pad_mask, init_att, base_flag):
+
+        emb_0 = self.word_lut(input[0][0].view(-1))
+        tgt_len = input.size(0)
 
         g_outputs = []
         c_outputs = []
@@ -162,34 +171,66 @@ class Decoder(nn.Module):
 
 
         mul_cs, mul_as = [],[]
-
-        select_head = torch.randint(0, self.n_heads - 1, size=(batch_size,1,1))
-
-        for emb_t in emb.split(1):
-            emb_t = emb_t.squeeze(0)
+        sample_y = []
+        is_Copys = []
+        all_pos = []
+        # select_head = torch.randint(0, self.n_heads - 1, size=(batch_size,1,1))
+        for i in range(tgt_len):
+            if i==0:
+                emb_t = emb_0
+            else:
+                emb_t = self.word_lut(sample_y[-1].view(-1))
             input_emb = emb_t
             if self.input_feed:
+
                 input_emb = torch.cat([emb_t, cur_context], 1)
+
             output, hidden = self.rnn(input_emb, hidden)
-            cur_context, context_attention, all_head_attn, mul_c, mul_a = self.attention(output.unsqueeze(1),k_s, v_s,select_head)
+            cur_context, context_attention, all_head_attn, mul_c, mul_a = self.attention(output.unsqueeze(1),k_s, v_s, base_flag)
             copyProb = self.copySwitch(torch.cat((output, cur_context), dim=1))
             copyProb = F.sigmoid(copyProb)
 
             readout = self.readout(torch.cat((emb_t, output, cur_context), dim=1))
             maxout = self.maxout(readout)
             output = self.dropout(maxout)
-            g_outputs += [output]
-            c_outputs += [context_attention]
+
+            g_prob = self.generator.forward(output)
+            wordLk = torch.log(g_prob * ((1 - copyProb).expand_as(g_prob))+ 1e-8)
+            copyLk = torch.log(context_attention * (copyProb.expand_as(context_attention))+ 1e-8)
+
+            g_outputs += [wordLk]
+            c_outputs += [copyLk]
             mul_head_attns += [all_head_attn]
             copyGateOutputs += [copyProb]
             mul_cs += [mul_c]
             mul_as += [mul_a]
+
+            numWords = wordLk.size(1)
+            numSrc = copyLk.size(1)
+            numAll = numWords + numSrc
+            allScores = torch.cat((wordLk, copyLk), dim=1)
+            bestScores, bestScoresId = allScores.topk(1, 1, True, True)
+            # bestScoresId is flattened beam x word array, so calculate which
+            # word and beam each score came from
+            prevK = bestScoresId / numAll
+            # predict = bestScoresId - prevK * numWords
+            predict = bestScoresId - prevK * numAll
+
+            isCopy = predict.squeeze(1).ge(self.tt.LongTensor(wordLk.size(0)).fill_(numWords)).long()
+            final_predict = predict.squeeze(1) * (1 - isCopy) + isCopy * s2s.Constants.UNK
+            is_Copys += [isCopy]
+            all_pos += [predict]
+            sample_y.append(final_predict.view(-1,1))
         g_outputs = torch.stack(g_outputs)
         c_outputs = torch.stack(c_outputs)
         copyGateOutputs = torch.stack(copyGateOutputs)
+        sample_y = torch.stack(sample_y)
         mul_cs = torch.stack(mul_cs)
         mul_as = torch.stack(mul_as)
-        return g_outputs, c_outputs, copyGateOutputs, hidden, context_attention, cur_context, mul_head_attns, mul_cs, mul_as
+        is_Copys = torch.stack(is_Copys)
+        all_pos = torch.stack(all_pos)
+
+        return sample_y, g_outputs, c_outputs, copyGateOutputs, hidden, context_attention, cur_context, mul_head_attns,is_Copys, all_pos, mul_cs, mul_as
 
 
 class DecInit(nn.Module):
@@ -221,7 +262,6 @@ class NMTModel(nn.Module):
         return Variable(context.data.new(*h_size).zero_(), requires_grad=False)
 
     def forward(self, input):
-
         # ipdb.set_trace()
         src = input[0]
         tgt = input[2][0][:-1]  # exclude last target from inputs
@@ -233,7 +273,7 @@ class NMTModel(nn.Module):
         init_att = self.make_init_att(context)
         enc_hidden = self.decIniter(enc_hidden[1]).unsqueeze(0)  # [1] is the last backward hiden
 
-        g_out, c_out, c_gate_out, dec_hidden, _attn, _attention_vector, mul_head_attns,mul_cs,mul_as  = self.decoder(tgt, enc_hidden, context,
-                                                                                      src_pad_mask, init_att)
-
-        return g_out, c_out, c_gate_out, mul_head_attns,mul_cs, mul_as
+        sample_y, g_out, c_out, c_gate_out, dec_hidden, _attn, _attention_vector, mul_head_attns, isCopys, predCopyPositions,mul_cs,mul_as  = self.decoder(tgt, enc_hidden, context,
+                                                                                      src_pad_mask, init_att,False)
+        base_y, _, _, _, _, _, _, _,base_isCopys, base_predCopyPositions, _, _ = self.decoder(tgt, enc_hidden, context,src_pad_mask, init_att,True)
+        return sample_y,isCopys, predCopyPositions, base_y, base_isCopys, base_predCopyPositions,g_out, c_out, c_gate_out, mul_head_attns,mul_cs, mul_as

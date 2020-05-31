@@ -60,7 +60,7 @@ def saveVocabulary(name, vocab, file):
 
 
 def makeData(srcFile, featFiles, tgtFile, srcDicts,  featDicts, tgtDicts):
-    src, tgt = [], []
+    src, tgt, ori_src, ori_tgt = [], [], [], []
     feats = []
     switch, c_tgt = [], []
     sizes = []
@@ -101,6 +101,8 @@ def makeData(srcFile, featFiles, tgtFile, srcDicts,  featDicts, tgtDicts):
         if len(srcWords) <= seq_length and len(tgtWords) <= seq_length:
             src += [srcDicts.convertToIdx(srcWords, s2s.Constants.UNK_WORD)]
             feats += [[featDicts.convertToIdx(x, s2s.Constants.UNK_WORD) for x in featWords]]
+            ori_src += [srcWords]
+            ori_tgt += [tgtWords]
             tgt += [tgtDicts.convertToIdx(tgtWords,
                                           s2s.Constants.UNK_WORD,
                                           s2s.Constants.BOS_WORD,
@@ -130,28 +132,63 @@ def makeData(srcFile, featFiles, tgtFile, srcDicts,  featDicts, tgtDicts):
     tgtF.close()
     for x in featFs:
         x.close()
+    count  = len(src)
+    new_src = []
+    new_tgt = {}
+    new_ori_src = []
+    new_ori_tgt = []
+    tgts = {}
+    switchs = {}
+    c_tgts = {}
+    ori_tgts = {}
+    new_feats = []
+    new_switch =[]
+    new_c_tgt = []
+    new_sizes = []
+    for i in range(count):
 
+        if [src[i]] not in new_src:
+            new_src.append(src[i])
+            new_ori_src.append(ori_src[i])
+            tgts[src[i]] = [tgt[i]]
+            ori_tgts[src[i]] = [ori_tgt[i]]
+            new_feats.append(feats[i])
+            switchs[src[i]] = [switch[i]]
+            c_tgts[src[i]] = [c_tgt[i]]
+            new_sizes.append(sizes[i])
+        else:
+            print('dd:', len(new_src), [src[i]] in new_src)
+            tgts[src[i]].append(tgt[i])
+            switchs[src[i]].append(switch[i])
+            c_tgts[src[i]].append(c_tgt[i])
+            ori_tgts[src[i]].append(ori_tgt[i])
     if shuffle == 1:
         logger.info('... shuffling sentences')
         perm = torch.randperm(len(src))
-        src = [src[idx] for idx in perm]
-        tgt = [tgt[idx] for idx in perm]
-        feats = [feats[idx] for idx in perm]
-        switch = [switch[idx] for idx in perm]
-        c_tgt = [c_tgt[idx] for idx in perm]
-        sizes = [sizes[idx] for idx in perm]
+        new_src = [new_src[idx] for idx in perm]
+        new_ori_src = [new_ori_src[idx] for idx in perm]
+        for src in new_src:
+            new_tgt.append(tgts[src])
+            new_ori_tgt.append(ori_tgts[src])
+            new_switch.append(switchs[src])
+            new_c_tgt.append(c_tgts[src])
+        new_feats = [new_feats[idx] for idx in perm]
+        new_sizes = [new_sizes[idx] for idx in perm]
 
     logger.info('... sorting sentences by size')
-    _, perm = torch.sort(torch.Tensor(sizes))
-    src = [src[idx] for idx in perm]
-    tgt = [tgt[idx] for idx in perm]
-    feats = [feats[idx] for idx in perm]
-    switch = [switch[idx] for idx in perm]
-    c_tgt = [c_tgt[idx] for idx in perm]
+    _, perm = torch.sort(torch.Tensor(new_sizes))
+    new_src = [new_src[idx] for idx in perm]
+    new_ori_src = [new_ori_src[idx] for idx in perm]
+    for src in new_src:
+        new_tgt.append(tgts[src])
+        new_ori_tgt.append(ori_tgts[src])
+        new_switch.append(switchs[src])
+        new_c_tgt.append(c_tgts[src])
+    new_feats = [new_feats[idx] for idx in perm]
 
     logger.info('Prepared %d sentences (%d ignored due to length == 0 or > %d)' %
-                (len(src), ignored, seq_length))
-    return src, feats, tgt, switch, c_tgt
+                (len(new_src), ignored, seq_length))
+    return new_src, new_feats, new_tgt, new_switch, new_c_tgt, new_ori_src, new_ori_tgt
 
 def save_vocab_embed(glove_path, dicts):
     wvmodel = gensim.models.KeyedVectors.load_word2vec_format(glove_path, binary=False, encoding='utf-8')
@@ -177,10 +214,8 @@ def prepare_data_online(train_src, src_vocab, train_feats, feat_vocab, train_tgt
     logger.info('Preparing training ...')
     train = {}
     train['src'],  train['feats'], \
-    train['tgt'], train['switch'], train['c_tgt'] = makeData(train_src,  train_feats,
-                                                             train_tgt,
-                                                             dicts['src'], dicts['feat'],
-                                                             dicts['tgt'])
+    train['tgt'], train['switch'], train['c_tgt'],train['ori_src'],train['ori_tgt'] = makeData(train_src,  train_feats,
+                                                             train_tgt,dicts['src'], dicts['feat'],dicts['tgt'])
 
     dataset = {'dicts': dicts,
                'train': train,

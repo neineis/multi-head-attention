@@ -83,7 +83,7 @@ class Translator(object):
         copied = False
         for i in range(len(tokens)):
             if isCopy[i]:
-                tokens[i] = '[[{0}]]'.format(src[copyPosition[i] - self.tgt_dict.size()])
+                tokens[i] = '{0}'.format(src[copyPosition[i] - self.tgt_dict.size()])
                 copied = True
         if copied:
             self.copyCount += 1

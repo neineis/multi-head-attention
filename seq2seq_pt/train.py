@@ -11,6 +11,7 @@ import time
 import datetime
 import logging
 import torch.nn.functional as F
+from nltk.translate.bleu_score import sentence_bleu,corpus_bleu
 
 try:
     import ipdb
@@ -68,16 +69,37 @@ def NMTCriterion(vocabSize):
     return crit
 
 
-def loss_function(g_outputs, g_targets, generator, crit, eval=False):
-    batch_size = g_outputs.size(1)
+def select_ref(candi_list, refs_list, targets, c_targets):
+    select_list = []
+    targets=targets.transpose(0,2)
+    c_targets = c_targets.transpose(0,2)
+    ret_ref = []
+    ret_targets = []
+    ret_c_targets = []
+    assert  len(candi_list)==len(refs_list)
+    for i in range(len(candi_list)):
+        candi = candi_list[i]
+        refs  = refs_list[i]
+        scores = []
+        for j in range(len(refs)):
+            score =sentence_bleu(candi, [refs[j]])
+            scores.append(score)
+        index = scores.index(max(scores))
+        select_list.append(index)
+        ret_ref.append([refs[index]])
+        ret_targets.append(targets[i][index])
+        ret_c_targets.append(c_targets[i][index])
+    ret_targets = torch.stack(ret_targets)
+    ret_c_targets = torch.stack(ret_c_targets)
+    return select_list, ret_ref,ret_targets,ret_c_targets
 
-    g_out_t = g_outputs.view(-1, g_outputs.size(2))
-    g_prob_t = generator(g_out_t)
 
-    g_loss = crit(g_prob_t, g_targets.view(-1))
-    total_loss = g_loss
-    report_loss = total_loss.item()
-    return total_loss, report_loss, 0
+def calc_Bleu(candidate, refs):
+    score = corpus_bleu(candidate, refs)
+    return score
+
+
+
 
 def diff_outputs(inputs):
     """ Calculate the differences of all heads outputs
@@ -155,20 +177,13 @@ def kl_categorical(tmps):
 
     return kls
 
-def generate_copy_loss_function(g_outputs, c_outputs, g_targets,
-                                c_switch, c_targets, c_gate_values,
-                                generator, crit, copyCrit,mul_cs, mul_as):
-    batch_size = g_outputs.size(1)
-
-    g_out_t = g_outputs.view(-1, g_outputs.size(2))
-    g_prob_t = generator(g_out_t)
-    g_prob_t = g_prob_t.view(-1, batch_size, g_prob_t.size(1))
-
-    c_output_prob = c_outputs * c_gate_values.expand_as(c_outputs) + 1e-8
-    g_output_prob = g_prob_t * (1 - c_gate_values).expand_as(g_prob_t) + 1e-8
-
-    c_output_prob_log = torch.log(c_output_prob)
-    g_output_prob_log = torch.log(g_output_prob)
+def generate_copy_loss_function(RL_score,g_output_prob_log, c_output_prob_log, g_targets,
+                                 c_targets,  crit, copyCrit,mul_cs, mul_as):
+    batch_size = g_output_prob_log.size(1)
+    g_targets = torch.index_select(g_targets, 1, torch.tensor([0]))
+    c_switch = torch.index_select(g_targets, 1, torch.tensor([0]))
+    c_targets = torch.index_select(c_targets, 1, torch.tensor([0]))
+    torch.index_select(g_targets, 1, torch.tensor([0]))
     c_output_prob_log = c_output_prob_log * (c_switch.unsqueeze(2).expand_as(c_output_prob_log))
     g_output_prob_log = g_output_prob_log * ((1 - c_switch).unsqueeze(2).expand_as(g_output_prob_log))
 
@@ -181,13 +196,12 @@ def generate_copy_loss_function(g_outputs, c_outputs, g_targets,
     as_loss = diff_positions(mul_as).sum()
     # kl_loss = diff_attn(mul_head_attns)
     # total_loss = g_loss + c_loss + kl_loss * 100
-    total_loss = g_loss + c_loss + cs_loss + 10 * as_loss
+    total_loss = (RL_score-0.3)*(g_loss + c_loss + cs_loss) + 10 * as_loss
 
     # print(torch.isnan(total_loss),torch.isnan(kl_loss),total_loss.item(),kl_loss.item())
     report_loss = total_loss.item()
     # print(report_loss)
     return total_loss, report_loss, cs_loss, as_loss, 0
-
 
 def addPair(f1, f2):
     for x, y1 in zip(f1, f2):
@@ -360,6 +374,7 @@ def trainModel(model, translator, trainData, validData, dataset, optim):
             (wrap(srcBatch), lengths), \
                (wrap(bioBatch), lengths), ((wrap(x) for x in featBatches), lengths), \
                (wrap(tgtBatch), wrap(copySwitchBatch), wrap(copyTgtBatch)), \
+               oriSrcBatch, oriTgtBatch,\
                indices
             """
             batchIdx = batchOrder[i] if epoch > opt.curriculum else i
@@ -368,15 +383,26 @@ def trainModel(model, translator, trainData, validData, dataset, optim):
             model.zero_grad()
             # ipdb.set_trace()
 
-            g_outputs, c_outputs, c_gate_values, mul_head_attns,mul_cs,mul_as = model(batch)
+            sample_y,isCopys, predCopyPositions, base_y, base_isCopys, base_predCopyPositions, g_outputs, c_outputs, c_gate_values, mul_head_attns,mul_cs,mul_as = model(batch)
             targets = batch[2][0][1:]  # exclude <s> from targets
-            copy_switch = batch[2][1][1:]
+            # copy_switch = batch[2][1][1:]
             c_targets = batch[2][2][1:]
-            #print('mul_head_attns:',len(mul_head_attns),len(mul_head_attns[0]),mul_head_attns[0][0].shape)
-            # loss, res_loss, num_correct = loss_function(g_outputs, targets, model.generator, criterion)
-            loss, res_loss, cs_loss, ca_loss, num_correct = generate_copy_loss_function(
-                g_outputs, c_outputs, targets, copy_switch, c_targets, c_gate_values, model.generator, criterion,
-                copyLossF, mul_cs,mul_as)
+            ori_src = batch[3]
+            ori_tgt = batch[4]
+
+            predBatch = []
+            sample_y = sample_y.transpose(0,1)
+            isCopys = isCopys.transpose(0,1)
+            predCopyPositions = predCopyPositions.transpose(0,1)
+            attn = attn.transpose(1, 2)
+            for b in range(targets.size(2)):
+                predBatch.append(
+                    translator.buildTargetTokens(sample_y[b], ori_src[b], isCopys[b], predCopyPositions[b], attn[b]))
+
+            select_list, ret_ref, ret_targets, ret_c_targets = select_ref(predBatch,ori_tgt,targets, c_targets)
+            RL_score = calc_Bleu(predBatch,ret_ref)
+            loss, res_loss, cs_loss, ca_loss, num_correct = generate_copy_loss_function(RL_score,
+                g_outputs, c_outputs, ret_targets, ret_c_targets, criterion,copyLossF, mul_cs, mul_as)
 
             if math.isnan(res_loss) or res_loss > 1e20:
                 if math.isnan(res_loss):
@@ -456,6 +482,7 @@ def main():
     trainData = s2s.Dataset(dataset['train']['src'], dataset['train']['feats'],
                             dataset['train']['tgt'],
                             dataset['train']['switch'], dataset['train']['c_tgt'],
+                            dataset['train']['ori_src'],dataset['train']['ori_tgt'],
                             opt.batch_size, opt.gpus)
     dicts = dataset['dicts']
     emb_weight = dataset['emb_weight']
@@ -515,7 +542,6 @@ def main():
         )
         optim.set_parameters(model.parameters())
     else:
-
         checkpoint = torch.load(opt.train_from)
         opt = checkpoint['opt']
         src_dict = checkpoint['dicts']['src']
@@ -550,8 +576,8 @@ def main():
 
 
     validData = None
-    if opt.dev_input_src and opt.dev_ref:
-        validData = load_dev_data(translator, opt.dev_input_src,  opt.dev_feats, opt.dev_ref)
+    # if opt.dev_input_src and opt.dev_ref:
+    #     validData = load_dev_data(translator, opt.dev_input_src,  opt.dev_feats, opt.dev_ref)
     trainModel(model, translator, trainData, validData, dataset, optim)
 
 
