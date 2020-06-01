@@ -64,6 +64,7 @@ class Translator(object):
         self.copyCount = 0
 
     def buildData(self, srcBatch, featsBatch, goldBatch):
+        # (self, srcData, featsData, tgtData, copySwitchData, copyTgtData,oriSrcData,oriTgtData,batchSize, cuda):
         srcData = [self.src_dict.convertToIdx(b,
                                               s2s.Constants.UNK_WORD) for b in srcBatch]
         featsData = [[self.feats_dict.convertToIdx(x, s2s.Constants.UNK_WORD) for x in b] for b in featsBatch]
@@ -74,7 +75,7 @@ class Translator(object):
                                                   s2s.Constants.BOS_WORD,
                                                   s2s.Constants.EOS_WORD) for b in goldBatch]
 
-        return s2s.Dataset(srcData, featsData, tgtData, None, None, self.opt.batch_size, self.opt.cuda)
+        return s2s.Dataset(srcData, featsData, tgtData, None, None, None, None, self.opt.batch_size, self.opt.cuda)
 
     def buildTargetTokens(self, pred, src, isCopy, copyPosition, attn):
         pred_word_ids = [x.item() for x in pred]
@@ -119,19 +120,23 @@ class Translator(object):
         for i in range(self.opt.max_sent_length):
             # Prepare decoder input.
             input = torch.stack([b.getCurrentState() for b in beam
-                                 if not b.done]).transpose(0, 1).contiguous().view(1, -1)
+                                 if not b.done]).transpose(0, 1).contiguous().view(1,1, -1)
 
             # print('input shape:',input.shape)  [1，beam_size]
-            g_outputs, c_outputs, copyGateOutputs, decStates, attn, att_vec, mul_head_attn, _,_= \
-                self.model.decoder(input, decStates, context, padMask.view(-1, padMask.size(2)), att_vec)
+            # input, hidden, context, src_pad_mask, init_att, base_flag
+            _, g_predict, c_predict, copyGateOutputs, decStates, attn, att_vec, mul_head_attn, _, _,_,_= \
+                self.model.decoder(input, decStates, context, padMask.view(-1, padMask.size(2)), att_vec,True)
+            #sample_y, g_outputs, c_outputs, copyGateOutputs, hidden, context_attention, cur_context, mul_head_attns,
+            # is_Copys, all_pos, mul_cs, mul_as
 
             # g_outputs: 1 x (beam*batch) x numWords
-            copyGateOutputs = copyGateOutputs.view(-1, 1)
-            g_outputs = g_outputs.squeeze(0)
-            g_out_prob = self.model.generator.forward(g_outputs) + 1e-8
-            g_predict = torch.log(g_out_prob * ((1 - copyGateOutputs).expand_as(g_out_prob)))
-            c_outputs = c_outputs.squeeze(0) + 1e-8
-            c_predict = torch.log(c_outputs * (copyGateOutputs.expand_as(c_outputs)))
+            # wordLk =  1 +
+            # copyGateOutputs = copyGateOutputs.view(-1, 1)
+            # g_outputs = g_outputs.squeeze(0)
+            # g_out_prob = self.model.generator.forward(g_outputs) + 1e-8
+            # g_predict = torch.log(g_out_prob * ((1 - copyGateOutputs).expand_as(g_out_prob)))
+            # c_outputs = c_outputs.squeeze(0) + 1e-8
+            # c_predict = torch.log(c_outputs * (copyGateOutputs.expand_as(c_outputs)))]
             mul_head_attn = mul_head_attn[0]
             num_head = len(mul_head_attn)
             mul_head_attn = torch.stack(mul_head_attn)

@@ -169,7 +169,6 @@ class Decoder(nn.Module):
         k_s = self.W_K(context.transpose(0, 1)).view(batch_size, -1, self.n_heads, self.dim_per_head).transpose(1, 2)
         v_s = self.W_V(context.transpose(0, 1)).view(batch_size, -1, self.n_heads, self.dim_per_head).transpose(1, 2)
 
-
         mul_cs, mul_as = [],[]
         sample_y = []
         is_Copys = []
@@ -275,5 +274,5 @@ class NMTModel(nn.Module):
 
         sample_y, g_out, c_out, c_gate_out, dec_hidden, _attn, _attention_vector, mul_head_attns, isCopys, predCopyPositions,mul_cs,mul_as  = self.decoder(tgt, enc_hidden, context,
                                                                                       src_pad_mask, init_att,False)
-        base_y, _, _, _, _, _, _, _,base_isCopys, base_predCopyPositions, _, _ = self.decoder(tgt, enc_hidden, context,src_pad_mask, init_att,True)
-        return sample_y,isCopys, predCopyPositions, base_y, base_isCopys, base_predCopyPositions,g_out, c_out, c_gate_out, mul_head_attns,mul_cs, mul_as
+        base_y, _, base_c_out, _, _, _, _, _,base_isCopys, base_predCopyPositions, _, _ = self.decoder(tgt, enc_hidden, context,src_pad_mask, init_att,True)
+        return sample_y,isCopys, predCopyPositions, base_y, base_isCopys, base_predCopyPositions,g_out, c_out, base_c_out,c_gate_out, mul_head_attns,mul_cs, mul_as

@@ -11,7 +11,8 @@ import time
 import datetime
 import logging
 import torch.nn.functional as F
-from nltk.translate.bleu_score import sentence_bleu,corpus_bleu
+from nltk.translate.bleu_score import sentence_bleu
+from nltk.translate.bleu_score import corpus_bleu
 
 try:
     import ipdb
@@ -69,33 +70,37 @@ def NMTCriterion(vocabSize):
     return crit
 
 
-def select_ref(candi_list, refs_list, targets, c_targets):
+def select_ref(candi_list, refs_list, targets,switch, c_targets):
     select_list = []
     targets=targets.transpose(0,2)
     c_targets = c_targets.transpose(0,2)
+    switch = switch.transpose(0,2)
     ret_ref = []
     ret_targets = []
     ret_c_targets = []
+    ret_c_switch = []
     assert  len(candi_list)==len(refs_list)
     for i in range(len(candi_list)):
         candi = candi_list[i]
         refs  = refs_list[i]
         scores = []
         for j in range(len(refs)):
-            score =sentence_bleu(candi, [refs[j]])
+            score = sentence_bleu( [refs[j]],candi)
             scores.append(score)
         index = scores.index(max(scores))
         select_list.append(index)
         ret_ref.append([refs[index]])
         ret_targets.append(targets[i][index])
         ret_c_targets.append(c_targets[i][index])
+        ret_c_switch.append(switch[i][index])
     ret_targets = torch.stack(ret_targets)
     ret_c_targets = torch.stack(ret_c_targets)
-    return select_list, ret_ref,ret_targets,ret_c_targets
+    ret_c_switch =torch.stack(ret_c_switch)
+    return select_list, ret_ref,ret_targets,ret_c_targets,ret_c_switch
 
 
 def calc_Bleu(candidate, refs):
-    score = corpus_bleu(candidate, refs)
+    score = corpus_bleu(refs,candidate)
     return score
 
 
@@ -177,18 +182,18 @@ def kl_categorical(tmps):
 
     return kls
 
-def generate_copy_loss_function(RL_score,g_output_prob_log, c_output_prob_log, g_targets,
+def generate_copy_loss_function(RL_score,base_RL_score,g_output_prob_log, c_output_prob_log, c_switch,g_targets,
                                  c_targets,  crit, copyCrit,mul_cs, mul_as):
     batch_size = g_output_prob_log.size(1)
-    g_targets = torch.index_select(g_targets, 1, torch.tensor([0]))
-    c_switch = torch.index_select(g_targets, 1, torch.tensor([0]))
-    c_targets = torch.index_select(c_targets, 1, torch.tensor([0]))
-    torch.index_select(g_targets, 1, torch.tensor([0]))
+    # g_targets = torch.index_select(g_targets, 1, torch.tensor([0]))
+    # c_switch = torch.index_select(g_targets, 1, torch.tensor([0]))
+    # c_targets = torch.index_select(c_targets, 1, torch.tensor([0]))
+    # torch.index_select(g_targets, 1, torch.tensor([0]))
     c_output_prob_log = c_output_prob_log * (c_switch.unsqueeze(2).expand_as(c_output_prob_log))
     g_output_prob_log = g_output_prob_log * ((1 - c_switch).unsqueeze(2).expand_as(g_output_prob_log))
 
-    g_output_prob_log = g_output_prob_log.view(-1, g_output_prob_log.size(2))
-    c_output_prob_log = c_output_prob_log.view(-1, c_output_prob_log.size(2))
+    g_output_prob_log = g_output_prob_log.contiguous().view(-1, g_output_prob_log.size(2))
+    c_output_prob_log = c_output_prob_log.contiguous().view(-1, c_output_prob_log.size(2))
 
     g_loss = crit(g_output_prob_log, g_targets.view(-1))
     c_loss = copyCrit(c_output_prob_log, c_targets.view(-1))
@@ -196,12 +201,14 @@ def generate_copy_loss_function(RL_score,g_output_prob_log, c_output_prob_log, g
     as_loss = diff_positions(mul_as).sum()
     # kl_loss = diff_attn(mul_head_attns)
     # total_loss = g_loss + c_loss + kl_loss * 100
-    total_loss = (RL_score-0.3)*(g_loss + c_loss + cs_loss) + 10 * as_loss
+    total_loss = -0.3* (RL_score-base_RL_score)* g_loss + 0.7*(c_loss + cs_loss + g_loss + 10 * as_loss)
+    # print('RL_score:',RL_score,g_loss)
 
     # print(torch.isnan(total_loss),torch.isnan(kl_loss),total_loss.item(),kl_loss.item())
+    rl_loss = RL_score
     report_loss = total_loss.item()
     # print(report_loss)
-    return total_loss, report_loss, cs_loss, as_loss, 0
+    return total_loss, rl_loss, report_loss, cs_loss, as_loss, 0
 
 def addPair(f1, f2):
     for x, y1 in zip(f1, f2):
@@ -232,6 +239,7 @@ def load_dev_data(translator, src_file,  feat_files, tgt_file):
             # at the end of file, check last batch
             if len(src_batch) == 0:
                 break
+
         data = translator.buildData(src_batch, feats_batch, tgt_batch)
         dataset.append(data)
         raw.append((src_batch, tgt_batch))
@@ -365,7 +373,7 @@ def trainModel(model, translator, trainData, validData, dataset, optim):
         batchOrder = torch.randperm(len(trainData))
 
         total_loss, total_cs_loss, total_ca_loss, total_words, total_num_correct = 0, 0, 0, 0, 0
-        report_loss, report_tgt_words, report_src_words, report_num_correct = 0, 0, 0, 0
+        report_loss, rl_loss,report_tgt_words, report_src_words, report_num_correct = 0, 0, 0, 0,0
         start = time.time()
         for i in range(len(trainData)):
             global totalBatchCount
@@ -383,9 +391,9 @@ def trainModel(model, translator, trainData, validData, dataset, optim):
             model.zero_grad()
             # ipdb.set_trace()
 
-            sample_y,isCopys, predCopyPositions, base_y, base_isCopys, base_predCopyPositions, g_outputs, c_outputs, c_gate_values, mul_head_attns,mul_cs,mul_as = model(batch)
+            sample_y,isCopys, predCopyPositions, base_y, base_isCopys, base_predCopyPositions, g_outputs, c_outputs,base_c_outputs, c_gate_values, mul_head_attns,mul_cs,mul_as = model(batch)
             targets = batch[2][0][1:]  # exclude <s> from targets
-            # copy_switch = batch[2][1][1:]
+            copy_switch = batch[2][1][1:]
             c_targets = batch[2][2][1:]
             ori_src = batch[3]
             ori_tgt = batch[4]
@@ -393,16 +401,30 @@ def trainModel(model, translator, trainData, validData, dataset, optim):
             predBatch = []
             sample_y = sample_y.transpose(0,1)
             isCopys = isCopys.transpose(0,1)
+            base_isCopys=base_isCopys.transpose(0,1)
             predCopyPositions = predCopyPositions.transpose(0,1)
-            attn = attn.transpose(1, 2)
+            base_predCopyPositions=base_predCopyPositions.transpose(0,1)
+            c_outputs = c_outputs.transpose(0, 1)
+            base_c_outputs=base_c_outputs.transpose(0, 1)
+            g_outputs =g_outputs.transpose(0,1)
+
+            base_predBatch = []
             for b in range(targets.size(2)):
                 predBatch.append(
-                    translator.buildTargetTokens(sample_y[b], ori_src[b], isCopys[b], predCopyPositions[b], attn[b]))
+                    translator.buildTargetTokens(sample_y[b], ori_src[b], isCopys[b], predCopyPositions[b], c_outputs[b]))
 
-            select_list, ret_ref, ret_targets, ret_c_targets = select_ref(predBatch,ori_tgt,targets, c_targets)
+
+
+            for b in range(targets.size(2)):
+                base_predBatch.append(
+                    translator.buildTargetTokens(base_y[b], ori_src[b], base_isCopys[b], base_predCopyPositions[b], base_c_outputs[b]))
+
+            select_list, ret_ref, ret_targets, ret_c_targets,ret_c_switch = select_ref(predBatch,ori_tgt,targets,copy_switch, c_targets)
             RL_score = calc_Bleu(predBatch,ret_ref)
-            loss, res_loss, cs_loss, ca_loss, num_correct = generate_copy_loss_function(RL_score,
-                g_outputs, c_outputs, ret_targets, ret_c_targets, criterion,copyLossF, mul_cs, mul_as)
+            _, ret_ref, _, _, _ = select_ref(base_predBatch, ori_tgt, targets,copy_switch, c_targets)
+            base_RL_score = calc_Bleu(base_predBatch, ret_ref)
+            loss, rl_loss_e, res_loss, cs_loss, ca_loss, num_correct = generate_copy_loss_function(RL_score,base_RL_score,
+                g_outputs, c_outputs,ret_c_switch, ret_targets, ret_c_targets, criterion,copyLossF, mul_cs, mul_as)
 
             if math.isnan(res_loss) or res_loss > 1e20:
                 if math.isnan(res_loss):
@@ -416,6 +438,7 @@ def trainModel(model, translator, trainData, validData, dataset, optim):
 
             num_words = targets.data.ne(s2s.Constants.PAD).sum().item()
             report_loss += res_loss
+            rl_loss += rl_loss_e
             report_num_correct += num_correct
             report_tgt_words += num_words
             report_src_words += batch[0][-1].data.sum()
@@ -426,7 +449,7 @@ def trainModel(model, translator, trainData, validData, dataset, optim):
             total_words += num_words
             if i % opt.log_interval == -1 % opt.log_interval:
                 logger.info(
-                    "Epoch %2d, %6d/%5d/%5d; acc: %6.2f; loss: %6.2f; cs_loss:%6.2f; ca_loss:%6.2f; words: %5d; ppl: %6.2f; %3.0f src tok/s; %3.0f tgt tok/s; %6.0f s elapsed" %
+                    "Epoch %2d, %6d/%5d/%5d; acc: %6.2f; loss: %6.2f;  cs_loss:%6.2f; ca_loss:%6.2f; words: %5d; ppl: %6.2f; %3.0f src tok/s; %3.0f tgt tok/s; %6.0f s elapsed" %
                     (epoch, totalBatchCount, i + 1, len(trainData),
                      report_num_correct / report_tgt_words * 100,
                      report_loss,
@@ -438,7 +461,7 @@ def trainModel(model, translator, trainData, validData, dataset, optim):
                      report_tgt_words / max((time.time() - start), 1.0),
                      time.time() - start))
 
-                report_loss = report_tgt_words = report_src_words = report_num_correct = 0
+                report_loss = rl_loss=report_tgt_words = report_src_words = report_num_correct = 0
                 start = time.time()
 
             if validData is not None and totalBatchCount % opt.eval_per_batch == -1 % opt.eval_per_batch \
@@ -576,8 +599,8 @@ def main():
 
 
     validData = None
-    # if opt.dev_input_src and opt.dev_ref:
-    #     validData = load_dev_data(translator, opt.dev_input_src,  opt.dev_feats, opt.dev_ref)
+    if opt.dev_input_src and opt.dev_ref:
+        validData = load_dev_data(translator, opt.dev_input_src,  opt.dev_feats, opt.dev_ref)
     trainModel(model, translator, trainData, validData, dataset, optim)
 
 

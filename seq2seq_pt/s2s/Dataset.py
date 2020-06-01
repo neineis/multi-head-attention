@@ -9,6 +9,7 @@ from torch.autograd import Variable
 import s2s
 
 
+
 class Dataset(object):
     def __init__(self, srcData, featsData, tgtData, copySwitchData, copyTgtData,oriSrcData,oriTgtData,
                  batchSize, cuda):
@@ -26,6 +27,8 @@ class Dataset(object):
             self.tgt = None
             self.copySwitch = None
             self.copyTgt = None
+            self.oriSrcData = None
+            self.oriTgtData = None
         self.device = torch.device("cuda" if cuda else "cpu")
 
         self.batchSize = batchSize
@@ -50,13 +53,13 @@ class Dataset(object):
         y_lengths = []
         for y in data:
             lengths += [x.size(0) for x in y]
-            y_lengths = [len(y)]
+            y_lengths.append(len(y))
         max_length = max(lengths)
         max_y_length = max(y_lengths)
-        out = data[0].new(len(data), max_y_length, max_length).fill_(s2s.Constants.PAD)
+        out = data[0][0].new(len(data), max_y_length, max_length).fill_(s2s.Constants.PAD)
 
         for i in range(len(data)):
-            for j in range(max_y_length):
+            for j in range(y_lengths[i]):
                 data_length = data[i][j].size(0)
                 offset = max_length - data_length if align_right else 0
                 out[i][j].narrow(0, offset, data_length).copy_(data[i][j])
@@ -72,15 +75,16 @@ class Dataset(object):
             align_right=False, include_lengths=True)
         featBatches = [self._batchify(x[index * self.batchSize:(index + 1) * self.batchSize], align_right=False) for x
                        in zip(*self.feats)]
-        oriSrcBatch = self.oriSrcData[index * self.batchSize:(index + 1) * self.batchSize]
+
         if self.tgt:
-            tgtBatch = self._batchify(
+            tgtBatch = self._batchify_tgt(
                 self.tgt[index * self.batchSize:(index + 1) * self.batchSize])
-            oriTgtBatch =self.oriTgtData[index * self.batchSize:(index + 1) * self.batchSize]
-
-
+            oriSrcBatch = self.oriSrcData[index * self.batchSize:(index + 1) * self.batchSize]
+            oriTgtBatch = self.oriTgtData[index * self.batchSize:(index + 1) * self.batchSize]
         else:
             tgtBatch = None
+            oriSrcBatch = None
+            oriTgtBatch = None
 
         if self.copySwitch is not None:
             copySwitchBatch = self._batchify_tgt(
@@ -121,11 +125,11 @@ class Dataset(object):
         def mul_wrap(b):
             if b is None:
                 return b
-            for i in range(len(b)):
-                b[i] = torch.stack(b[i],0).contiguous()
+
             b = torch.stack(b, 0)
             b= b.transpose(0,2).contiguous()
             b = b.to(self.device)
+
             return b
 
         # wrap lengths in a Variable to properly split it in DataParallel

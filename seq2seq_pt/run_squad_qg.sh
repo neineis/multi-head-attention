@@ -11,7 +11,7 @@ mkdir -p ${SAVEPATH}
 
 cd ${EXEHOME}
 
-CUDA_VISIBLE_DEVICES=1 python3 train.py \
+CUDA_VISIBLE_DEVICES=3 python3 train.py \
        -save_path ${SAVEPATH} -log_home ${SAVEPATH} \
        -online_process_data \
        -train_src ${DATAHOME}/train/train.txt.source.txt -src_vocab ${DATAHOME}/train/vocab.txt.20k \

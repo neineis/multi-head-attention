@@ -3,7 +3,7 @@ import torch
 import s2s
 import gensim
 from gensim.scripts.glove2word2vec import glove2word2vec
-import  os
+import os
 
 try:
     import ipdb
@@ -74,7 +74,8 @@ def makeData(srcFile, featFiles, tgtFile, srcDicts,  featDicts, tgtDicts):
     index = 0
     while True:
         index += 1
-        if index % 10000 == 0: print("preprocess:"+str(index))
+        # if index % 10000 == 0: print("preprocess:"+str(index))
+        if index == 10241:break
         sline = srcF.readline()
         tline = tgtF.readline()
         featLines = [x.readline() for x in featFs]
@@ -152,13 +153,11 @@ def makeData(srcFile, featFiles, tgtFile, srcDicts,  featDicts, tgtDicts):
     new_switch =[]
     new_c_tgt = []
     new_sizes = []
-
     store_map = {}
     #print("srclen:"+str(len(src))+":"+str(src[0])+":"+str(src[1]))
+
     for i in range(count):
-        #print(str(src[i]))
-        #print(str(new_src))
-        if i % 1000 == 0: print("processing:"+str(i))
+        # if i % 1000 == 0: print("processing:"+str(i))
         ismatch = False
         index_new = -1
         for index_new, new_src_item in enumerate(new_src):
