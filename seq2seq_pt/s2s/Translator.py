@@ -82,6 +82,8 @@ class Translator(object):
         tokens = self.tgt_dict.convertToLabels(pred_word_ids, s2s.Constants.EOS)
         tokens = tokens[:-1]  # EOS
         copied = False
+        print('tokens:',len(tokens))
+        print('isCopy:',isCopy.shape)
         for i in range(len(tokens)):
             if isCopy[i]:
                 tokens[i] = '{0}'.format(src[copyPosition[i] - self.tgt_dict.size()])
@@ -117,14 +119,14 @@ class Translator(object):
         batchIdx = list(range(batchSize))
         remainingSents = batchSize
 
-        for i in range(self.opt.max_sent_length):
+        for i in range(self.opt.max_dec_length):
             # Prepare decoder input.
             input = torch.stack([b.getCurrentState() for b in beam
                                  if not b.done]).transpose(0, 1).contiguous().view(1,1, -1)
 
-            # print('input shape:',input.shape)  [1，beam_size]
+            print('input shape:',input.shape)  #[1，beam_size]
             # input, hidden, context, src_pad_mask, init_att, base_flag
-            _, g_predict, c_predict, copyGateOutputs, decStates, attn, att_vec, mul_head_attn, _, _,_,_= \
+            _, g_predict, c_predict, copyGateOutputs, decStates, attn, att_vec, mul_head_attn, _, _, _, _= \
                 self.model.decoder(input, decStates, context, padMask.view(-1, padMask.size(2)), att_vec,True)
             #sample_y, g_outputs, c_outputs, copyGateOutputs, hidden, context_attention, cur_context, mul_head_attns,
             # is_Copys, all_pos, mul_cs, mul_as
@@ -144,6 +146,7 @@ class Translator(object):
             # batch x beam x numWords
             wordLk = g_predict.view(beamSize, remainingSents, -1).transpose(0, 1).contiguous()
             copyLk = c_predict.view(beamSize, remainingSents, -1).transpose(0, 1).contiguous()
+            print('wordLk:',wordLk.shape,copyLk.shape)
             attn = attn.view(beamSize, remainingSents, -1).transpose(0, 1).contiguous()
             #print('mul_head_attn.shape:', mul_head_attn.shape)
             mul_head_attn = mul_head_attn.view(beamSize, num_head, remainingSents, -1).transpose(1, 2).transpose(0,1).contiguous()
@@ -228,6 +231,7 @@ class Translator(object):
 
         #  (2) translate
         pred, predScore, predIsCopy, predCopyPosition, attn, mul_attn, _ = self.translateBatch(src,  feats, tgt)
+        print('pred:',type(pred),pred.shape)
         pred, predScore, predIsCopy, predCopyPosition, attn = list(zip(
             *sorted(zip(pred, predScore, predIsCopy, predCopyPosition, attn, indices),
                     key=lambda x: x[-1])))[:-1]

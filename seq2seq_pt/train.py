@@ -85,7 +85,7 @@ def select_ref(candi_list, refs_list, targets,switch, c_targets):
         refs  = refs_list[i]
         scores = []
         for j in range(len(refs)):
-            score = sentence_bleu( [refs[j]],candi)
+            score = sentence_bleu([refs[j]],candi)
             scores.append(score)
         index = scores.index(max(scores))
         select_list.append(index)

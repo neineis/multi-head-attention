@@ -42,7 +42,7 @@ def add_data_options(parser):
                         help='Beam size')
     parser.add_argument('-max_sent_length', type=int, default=100,
                         help='Maximum sentence length.')
-    parser.add_argument('-max_dec_length', type=int, default=20,
+    parser.add_argument('-max_dec_length', type=int, default=30,
                         help='Maximum sentence length.')
 
 

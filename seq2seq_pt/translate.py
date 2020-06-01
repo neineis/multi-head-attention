@@ -38,7 +38,7 @@ parser.add_argument('-batch_size', type=int, default=1,
                     help='Batch size')
 parser.add_argument('-max_sent_length', type=int, default=100,
                     help='Maximum sentence length.')
-parser.add_argument('-max_dec_length', type=int, default=20,
+parser.add_argument('-max_dec_length', type=int, default=30,
                     help='Maximum sentence length.')
 parser.add_argument('-replace_unk', action="store_true",
                     help="""Replace the generated UNK tokens with the source
